@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Assinador Digital</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+  <h2>Assinador Digital</h2>
+
+  <input id="nome" placeholder="Nome">
+  <input id="email" placeholder="Email">
+  <input id="password" type="password" placeholder="Senha">
+
+  <button onclick="auth()">Entrar / Cadastrar</button>
+</div>
+
+<script>
+async function auth() {
+  const nome = document.getElementById("nome").value;
+  const email = document.getElementById("email").value;
+  const password = document.getElementById("password").value;
+
+  const res = await fetch("/auth", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nome, email, password })
+  });
+
+  const data = await res.json();
+
+  console.log("RESPOSTA:", data); // 👈 IMPORTANTE
+
+  if (data.user) {
+    localStorage.setItem("user_id", data.user.id);
+    window.location.href = "/sign.html";
+  } else {
+    alert(JSON.stringify(data)); // 👈 MOSTRA ERRO REAL
+  }
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Assinar</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+  <h2>Assinar Documento</h2>
+
+  <textarea id="texto" placeholder="Digite o texto"></textarea>
+
+  <button onclick="assinar()">Assinar</button>
+
+  <br><br>
+
+  <input id="assinatura_id" placeholder="ID da assinatura">
+
+  <button onclick="verificar()">Verificar</button>
+
+  <!-- RESULTADO NA TELA -->
+  <div id="resultado" style="margin-top:15px; font-weight:bold;"></div>
+</div>
+
+<script>
+async function assinar() {
+  const texto = document.getElementById("texto").value;
+
+  const res = await fetch("/sign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: localStorage.getItem("user_id"),
+      texto
+    })
+  });
+
+  const data = await res.json();
+
+  alert("Assinatura criada! ID: " + data.registro.id);
+}
+
+async function verificar() {
+  const assinatura_id = document.getElementById("assinatura_id").value;
+  const resultado = document.getElementById("resultado");
+
+  const res = await fetch("/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ assinatura_id })
+  });
+
+  const data = await res.json();
+
+  if (data.error) {
+    resultado.innerText = data.error;
+    resultado.style.color = "red";
+    return;
+  }
+
+  if (data.valido) {
+    resultado.innerHTML = `
+      <p style="color:green;"><b>✅ Assinatura válida</b></p>
+      <p><b>Texto:</b> ${data.texto}</p>
+      <p><b>Signatário:</b> ${data.signatario}</p>
+      <p><b>Email:</b> ${data.email}</p>
+      <p><b>Algoritmo:</b> ${data.algoritmo}</p>
+      <p><b>Data:</b> ${new Date(data.data).toLocaleString()}</p>
+    `;
+  } else {
+    resultado.innerHTML = `
+      <p style="color:red;"><b>❌ Assinatura inválida</b></p>
+      <p><b>Texto:</b> ${data.texto}</p>
+      <p><b>Signatário:</b> ${data.signatario}</p>
+      <p><b>Algoritmo:</b> ${data.algoritmo}</p>
+    `;
+  }
+}
+</script>
+
+</body>
+</html>

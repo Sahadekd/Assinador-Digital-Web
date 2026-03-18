@@ -1,264 +1,160 @@
-const express = require("express")
-const crypto = require("crypto")
-const cors = require("cors")
-const { createClient } = require("@supabase/supabase-js")
+const express = require("express");
+const cors = require("cors");
+const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
+require("dotenv").config();
 
-const app = express()
+const { createClient } = require("@supabase/supabase-js");
 
-app.use(express.json())
-app.use(cors())
-
-// servir frontend
-app.use(express.static("frontend"))
-
-const PORT = 3000
-
-
-// ============================
-// SUPABASE
-// ============================
-
+const app = express();
+app.use(cors());
+app.use(express.json());
+app.use(express.static("public"));
 
 const supabase = createClient(
- "https://ymgafrwqmhdfgjhagqiu.supabase.co",
- "sb_publishable_TukYYsKFgO2YkuM5CwT8mw_zMhBVkcz"
-)
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 
+// LOGIN / CADASTRO
+app.post("/auth", async (req, res) => {
+  const { nome, email, password } = req.body;
 
-// ============================
-// AUTH (LOGIN + CADASTRO)
-// ============================
+  const { data: users, error } = await supabase
+    .from("users")
+    .select("*")
+    .eq("email", email);
 
-app.post("/auth", async (req,res)=>{
-
- const { nome,email,password } = req.body
-
- const { data:user, error } = await supabase
- .from("users")
- .select("*")
- .eq("email",email)
- .maybeSingle()
-
- if(error){
-  return res.status(500).json({ error: error.message })
- }
-
- // =====================
- // LOGIN
- // =====================
-
- if(user){
-
-  if(user.password_hash !== password){
-   return res.status(401).json({
-    error:"Senha incorreta"
-   })
+  if (error) {
+    console.error(error);
+    return res.status(400).json(error);
   }
 
-  return res.json({
-   message:"Login realizado",
-   user_id:user.id
-  })
+  const existingUser = users[0];
 
- }
+  // LOGIN
+  if (existingUser) {
+    const match = await bcrypt.compare(password, existingUser.password_hash);
 
- // =====================
- // CADASTRO AUTOMÁTICO
- // =====================
+    if (!match) {
+      return res.status(401).json({ error: "Senha incorreta" });
+    }
 
- const { publicKey, privateKey } =
- crypto.generateKeyPairSync("rsa",{
-
-  modulusLength:2048,
-
-  publicKeyEncoding:{
-   type:"spki",
-   format:"pem"
-  },
-
-  privateKeyEncoding:{
-   type:"pkcs8",
-   format:"pem"
+    return res.json({ user: existingUser });
   }
 
- })
+  // CADASTRO
+  const hash = await bcrypt.hash(password, 10);
 
- const { data:newUser, error:insertError } = await supabase
- .from("users")
- .insert({
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+  });
 
-  nome: nome || "Usuário",
-  email,
-  password_hash: password,
-  public_key: publicKey,
-  private_key: privateKey
+  const { data, error: insertError } = await supabase
+    .from("users")
+    .insert([
+      {
+        nome,
+        email,
+        password_hash: hash,
+        public_key: publicKey.export({ type: "pkcs1", format: "pem" }),
+        private_key: privateKey.export({ type: "pkcs1", format: "pem" }),
+      },
+    ])
+    .select();
 
- })
- .select()
- .single()
+  if (insertError) {
+    console.error(insertError);
+    return res.status(400).json(insertError);
+  }
 
- if(insertError){
-  return res.status(500).json({
-   error: insertError.message
-  })
- }
+  res.json({ user: data[0] });
+});
 
- return res.json({
-  message:"Usuário criado automaticamente",
-  user_id:newUser.id
- })
+// ASSINAR
+app.post("/sign", async (req, res) => {
+  const { user_id, texto } = req.body;
 
-})
+  const { data: user } = await supabase
+    .from("users")
+    .select("*")
+    .eq("id", user_id)
+    .single();
 
+  const sign = crypto.createSign("SHA256");
+  sign.update(texto);
 
-// ============================
-// ASSINAR TEXTO
-// ============================
+  const assinatura = sign.sign(user.private_key, "hex");
 
-app.post("/sign", async (req,res)=>{
+  const hash = crypto.createHash("sha256").update(texto).digest("hex");
 
- const { user_id,texto } = req.body
+const { data } = await supabase
+  .from("signatures")
+  .insert([
+    {
+      user_id,
+      texto,
+      hash,
+      assinatura,
+      algoritmo: "RSA-SHA256"
+    },
+  ])
+  .select();
 
- const { data:user } = await supabase
- .from("users")
- .select("*")
- .eq("id",user_id)
- .single()
+  res.json({ assinatura, registro: data[0] });
+});
 
- if(!user){
-  return res.status(404).json({
-   error:"Usuário não encontrado"
-  })
- }
+// VERIFY
+app.post("/verify", async (req, res) => {
+  const { assinatura_id } = req.body;
 
- // HASH
- const hash = crypto
- .createHash("sha256")
- .update(texto)
- .digest("hex")
+  const { data: signature, error: errorSig } = await supabase
+    .from("signatures")
+    .select("*")
+    .eq("id", assinatura_id)
+    .single();
 
- // ASSINATURA
- const sign = crypto.createSign("RSA-SHA256")
- sign.update(texto)
+  if (errorSig || !signature) {
+    console.error("Erro signature:", errorSig);
+    return res.status(404).json({ error: "Assinatura não encontrada" });
+  }
 
- const assinatura = sign.sign(
-  user.private_key,
-  "hex"
- )
+  const { data: user, error: errorUser } = await supabase
+    .from("users")
+    .select("*")
+    .eq("id", signature.user_id)
+    .single();
 
- // SALVAR
- const { data } = await supabase
- .from("signatures")
- .insert({
+  if (errorUser || !user) {
+    console.error("Erro user:", errorUser);
+    return res.status(404).json({ error: "Usuário não encontrado" });
+  }
 
-  user_id,
-  texto,
-  hash,
-  assinatura,
-  algoritmo:"RSA-SHA256"
+  const verify = crypto.createVerify("SHA256");
+  verify.update(signature.texto);
 
- })
- .select()
- .single()
+  const valido = verify.verify(user.public_key, signature.assinatura, "hex");
 
- res.json({
-  assinatura_id:data.id
- })
+  await supabase.from("verify_logs").insert([
+    {
+      signature_id: assinatura_id,
+      resultado: valido,
+    },
+  ]);
 
-})
+  // 👇 DEBUG IMPORTANTE
+  console.log("SIGNATURE:", signature);
+  console.log("USER:", user);
 
-
-// ============================
-// VERIFICAR
-// ============================
-
-app.get("/verify/:id", async (req,res)=>{
-
- const id = req.params.id
-
- // buscar assinatura
- const { data:assinatura } = await supabase
- .from("signatures")
- .select("*")
- .eq("id",id)
- .single()
-
- if(!assinatura){
-  return res.status(404).json({
-   error:"Assinatura não encontrada"
-  })
- }
-
- // buscar usuario
- const { data:user } = await supabase
- .from("users")
- .select("*")
- .eq("id",assinatura.user_id)
- .single()
-
- // verificar assinatura
- const verify = crypto.createVerify("RSA-SHA256")
- verify.update(assinatura.texto)
-
- const valido = verify.verify(
-  user.public_key,
-  assinatura.assinatura,
-  "hex"
- )
-
- console.log("resultado verificação:", valido)
-
- // salvar log
- const { error } = await supabase
- .from("verify_logs")
- .insert({
-
-  signature_id: id,
-  resultado: valido
-
- })
-
- if(error){
-  console.log("erro ao salvar log:", error)
- }
-
- // resposta
- res.json({
-
-  status: valido ? "VALIDA":"INVALIDA",
-  signatario:user.nome,
-  algoritmo:assinatura.algoritmo,
-  data:assinatura.created_at,
-  texto:assinatura.texto
-
- })
-
-})
-
-
-// ============================
-
-app.listen(PORT,()=>{
-
- console.log("Servidor rodando")
- console.log("http://localhost:3000")
-
-})
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  res.json({
+    valido,
+    texto: signature.texto,
+    algoritmo: signature.algoritmo,
+    data: signature.created_at,
+    signatario: user.nome,
+    email: user.email
+  });
+});
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Rodando na porta " + (process.env.PORT || 3000));
+});
