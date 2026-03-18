@@ -80,6 +80,7 @@ cd assinatura
 ## 2. Instalar dependências
 
 ```bash
+npm install express cors bcryptjs dotenv @supabase/supabase-js
 npm install
 ```
 
